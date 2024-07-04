@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
+import android.net.ConnectivityManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
@@ -22,25 +23,33 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.RequestBody
 import okhttp3.logging.HttpLoggingInterceptor
+import org.json.JSONArray
+import org.json.JSONObject
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import java.io.BufferedReader
 import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
+import java.io.IOException
+import java.io.InputStreamReader
+import java.io.OutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Collections
+import java.util.UUID
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
-    private lateinit var naverOcrService: NaverOcrService
-
     private lateinit var cameraDevice: CameraDevice
     private lateinit var captureRequestBuilder: CaptureRequest.Builder
     private lateinit var cameraCaptureSessions: CameraCaptureSession
     private lateinit var backgroundHandler: Handler
     private lateinit var backgroundThread: HandlerThread
 
-    private val apiKey: String by lazy {
+    private val secretKey: String by lazy {
         BuildConfig.OCR_SECRET_KEY
     }
 
@@ -132,76 +141,126 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Retrofit 빌더 설정
-        val logging = HttpLoggingInterceptor()
-        logging.setLevel(HttpLoggingInterceptor.Level.BODY)
-
-        val client = OkHttpClient.Builder()
-            .addInterceptor(logging)
-            .build()
-
-        val retrofit = Retrofit.Builder()
-            .baseUrl("$invokeUrl/")
-            .addConverterFactory(GsonConverterFactory.create())
-            .client(client)
-            .build()
-
-        naverOcrService = retrofit.create(NaverOcrService::class.java)
-
         // 미리 준비된 이미지 파일을 지정하여 OCR 수행
         binding.btnOcr.setOnClickListener {
-            performOcrWithPredefinedImage()
+            performOcrWithLocalImage()
         }
 
         binding.textureView.surfaceTextureListener = textureListener
     }
 
-    private fun getBitmapFromDrawable(): Bitmap {
+    private fun getBitmapFromLocalFile(): Bitmap {
         val drawableId = R.drawable.medi // drawable 파일 이름이 medi.jpg인 경우
         return BitmapFactory.decodeResource(resources, drawableId)
     }
 
-    private fun performOcrWithPredefinedImage() {
-        val bitmap = getBitmapFromDrawable()
+    private fun performOcrWithLocalImage() {
+        val bitmap = getBitmapFromLocalFile()
         performOcrWithBitmap(bitmap)
+    }
+    private fun isNetworkAvailable(): Boolean {
+        val connectivityManager = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+        val activeNetworkInfo = connectivityManager.activeNetworkInfo
+        return activeNetworkInfo?.isConnected == true
     }
 
     private fun performOcrWithBitmap(bitmap: Bitmap) {
+        if (!isNetworkAvailable()) {
+            runOnUiThread {
+                Toast.makeText(this, "No internet connection", Toast.LENGTH_SHORT).show()
+                binding.tvOcr.text = "No internet connection"
+            }
+            return
+        }
+
         val stream = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.JPEG, 100, stream)
         val byteArray = stream.toByteArray()
-        val requestFile = RequestBody.create("image/jpg".toMediaTypeOrNull(), byteArray) // MIME type을 "image/jpg"로 설정
-        val body = MultipartBody.Part.createFormData("file", "medi.jpg", requestFile)
 
-        Log.d("OCR_REQUEST", "Sending OCR request with Bitmap")
-        Log.d("OCR_REQUEST", "API Key: $apiKey")
-        Log.d("OCR_REQUEST", "Invoke URL: $invokeUrl")
+        Thread {
+            try {
+                Log.d("OCR_REQUEST", "Connecting to URL: $invokeUrl")
+                val url = URL(invokeUrl)
+                val con = url.openConnection() as HttpURLConnection
+                con.useCaches = false
+                con.doInput = true
+                con.doOutput = true
+                con.readTimeout = 30000
+                con.requestMethod = "POST"
+                val boundary = "----" + UUID.randomUUID().toString().replace("-", "")
+                con.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                con.setRequestProperty("X-OCR-SECRET", secretKey)
 
-        val call = naverOcrService.ocrImage(body, apiKey)
-        call.enqueue(object : Callback<OcrResponse> {
-            override fun onResponse(call: Call<OcrResponse>, response: Response<OcrResponse>) {
-                if (response.isSuccessful) {
-                    val ocrResponse = response.body()
-                    val resultText = ocrResponse?.images?.joinToString("\n") { image ->
-                        image.fields.joinToString("\n") { field ->
-                            field.inferText
-                        }
-                    }
-                    binding.tvOcr.text = resultText ?: "No text found"
-                    Log.d("OCR_RESPONSE", "OCR success: $resultText")
-                } else {
-                    binding.tvOcr.text = "OCR failed: ${response.message()}"
-                    Log.e("OCR_RESPONSE", "OCR failed with response code: ${response.code()}")
-                    Log.e("OCR_RESPONSE", "Response message: ${response.message()}")
-                    Log.e("OCR_RESPONSE", "Response error body: ${response.errorBody()?.string()}")
+                val json = JSONObject().apply {
+                    put("version", "V2")
+                    put("requestId", UUID.randomUUID().toString())
+                    put("timestamp", System.currentTimeMillis())
+                    put("images", JSONArray().put(JSONObject().apply {
+                        put("format", "jpg")
+                        put("name", "demo")
+                    }))
                 }
-            }
+                val postParams = json.toString()
 
-            override fun onFailure(call: Call<OcrResponse>, t: Throwable) {
-                binding.tvOcr.text = "OCR error: ${t.message}"
-                Log.e("OCR_RESPONSE", "OCR request failed: ${t.message}")
+                con.connect()
+                Log.d("OCR_REQUEST", "Connected. Writing data...")
+                DataOutputStream(con.outputStream).use { wr ->
+                    writeMultiPart(wr, postParams, byteArray, boundary)
+                    wr.close()
+                }
+
+                val responseCode = con.responseCode
+                Log.d("OCR_REQUEST", "Response code: $responseCode")
+                val response = StringBuffer()
+                BufferedReader(InputStreamReader(if (responseCode == 200) con.inputStream else con.errorStream)).use { br ->
+                    var inputLine: String?
+                    while (br.readLine().also { inputLine = it } != null) {
+                        response.append(inputLine)
+                    }
+                }
+
+                runOnUiThread {
+                    if (responseCode == 200) {
+                        binding.tvOcr.text = "OCR 성공: ${response}"
+                        Log.d("OCR_RESPONSE", "OCR 성공: ${response}")
+                    } else {
+                        binding.tvOcr.text = "OCR 실패: ${response}"
+                        Log.e("OCR_RESPONSE", "OCR 실패: ${response}")
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    binding.tvOcr.text = "OCR 에러: ${e.message}"
+                    Log.e("OCR_REQUEST", "OCR 에러: ${e.message}", e)
+                }
+                e.printStackTrace()
             }
-        })
+        }.start()
+    }
+
+    @Throws(IOException::class)
+    private fun writeMultiPart(out: OutputStream, jsonMessage: String, byteArray: ByteArray, boundary: String) {
+        val sb = StringBuilder()
+        sb.append("--").append(boundary).append("\r\n")
+        sb.append("Content-Disposition:form-data; name=\"message\"\r\n\r\n")
+        sb.append(jsonMessage)
+        sb.append("\r\n")
+
+        out.write(sb.toString().toByteArray(Charsets.UTF_8))
+        out.flush()
+
+        out.write(("--$boundary\r\n").toByteArray(Charsets.UTF_8))
+        val fileString = StringBuilder()
+        fileString.append("Content-Disposition:form-data; name=\"file\"; filename=\"medi.jpg\"\r\n")
+        fileString.append("Content-Type: application/octet-stream\r\n\r\n")
+        out.write(fileString.toString().toByteArray(Charsets.UTF_8))
+        out.flush()
+
+        out.write(byteArray)
+        out.write("\r\n".toByteArray(Charsets.UTF_8))
+
+        out.write(("--$boundary--\r\n").toByteArray(Charsets.UTF_8))
+        out.flush()
     }
 
     private fun startBackgroundThread() {

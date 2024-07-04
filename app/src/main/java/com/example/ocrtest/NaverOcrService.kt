@@ -7,12 +7,15 @@ import retrofit2.http.Header
 import retrofit2.http.Multipart
 import retrofit2.http.POST
 import retrofit2.http.Part
+import retrofit2.http.Url
 
 interface NaverOcrService {
     @Multipart
-    @POST("recognizer/upload")
+    @POST
     fun ocrImage(
-        @Part media: MultipartBody.Part,
+        @Url url: String,
+        @Part file: MultipartBody.Part,
+        @Header("Content-Type") contentType: String,
         @Header("X-OCR-SECRET") apiKey: String
     ): Call<OcrResponse>
 }
@@ -22,10 +25,9 @@ data class OcrResponse(
 )
 
 data class ImageResult(
-    val inferResult: String,
-    val fields: List<Field>
+    val fields: List<FieldResult>
 )
 
-data class Field(
+data class FieldResult(
     val inferText: String
 )
