@@ -10,14 +10,22 @@ import retrofit2.http.Part
 
 interface NaverOcrService {
     @Multipart
-    @POST("v1/recognizer/upload")
-    fun ocrSpeech(
+    @POST("recognizer/upload")
+    fun ocrImage(
         @Part media: MultipartBody.Part,
-        @Part("message") params: RequestBody,
         @Header("X-OCR-SECRET") apiKey: String
     ): Call<OcrResponse>
 }
 
 data class OcrResponse(
-    val text: String
+    val images: List<ImageResult>
+)
+
+data class ImageResult(
+    val inferResult: String,
+    val fields: List<Field>
+)
+
+data class Field(
+    val inferText: String
 )
