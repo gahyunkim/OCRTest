@@ -27,14 +27,24 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"/>
 
-    <TextView
+    <androidx.core.widget.NestedScrollView
+        app:layout_constraintTop_toBottomOf="@id/btn_ocr"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/btn_ocr"
-        android:layout_marginTop="30dp"
-        android:id="@+id/tv_ocr"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="텍스트 인식 중"/>
+        android:layout_marginTop="30dp"
+        android:layout_height="wrap_content">
+
+        <TextView
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            android:id="@+id/tv_ocr"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="텍스트 인식 중"/>
+
+    </androidx.core.widget.NestedScrollView>
+
+
 
 </androidx.constraintlayout.widget.ConstraintLayout>
