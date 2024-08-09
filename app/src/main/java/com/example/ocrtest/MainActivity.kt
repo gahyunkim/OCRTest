@@ -150,7 +150,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun getBitmapFromLocalFile(): Bitmap {
-        val drawableId = R.drawable.medi // drawable 파일 이름이 medi.jpg인 경우
+        val drawableId = R.drawable.medi3 // drawable 파일 이름이 medi3.jpg인 경우
         return BitmapFactory.decodeResource(resources, drawableId)
     }
 
@@ -195,11 +195,17 @@ class MainActivity : AppCompatActivity() {
                     put("version", "V2")
                     put("requestId", UUID.randomUUID().toString())
                     put("timestamp", System.currentTimeMillis())
-                    put("images", JSONArray().put(JSONObject().apply {
+                    put("lang", "ko")  // 언어를 지정합니다. 예: 한국어 "ko"
+                    put("enableTableDetection", true)  // 표 인식을 활성화
+
+                    val imageObject = JSONObject().apply {
                         put("format", "jpg")
                         put("name", "demo")
-                    }))
+                    }
+
+                    put("images", JSONArray().put(imageObject))
                 }
+
                 val postParams = json.toString()
 
                 con.connect()
@@ -223,6 +229,9 @@ class MainActivity : AppCompatActivity() {
                     if (responseCode == 200) {
                         binding.tvOcr.text = "OCR 성공: ${response}"
                         Log.d("OCR_RESPONSE", "OCR 성공: ${response}")
+
+                        // 응답을 기반으로 데이터를 분류하고 저장
+                        processOcrResponse(response.toString())
                     } else {
                         binding.tvOcr.text = "OCR 실패: ${response}"
                         Log.e("OCR_RESPONSE", "OCR 실패: ${response}")
@@ -238,6 +247,111 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    private fun processOcrResponse(response: String) {
+        try {
+            val jsonResponse = JSONObject(response)
+            val images = jsonResponse.getJSONArray("images")
+            val tables = images.getJSONObject(0).getJSONArray("tables")
+
+            // 결과를 저장할 리스트
+            val extractedData = mutableListOf<Map<String, String>>()
+
+            var isProcessingDrugs = false
+
+            for (tableIndex in 0 until tables.length()) {
+                val cells = tables.getJSONObject(tableIndex).getJSONArray("cells")
+
+                for (i in 0 until cells.length()) {
+                    val cell = cells.getJSONObject(i)
+                    val rowIndex = cell.getInt("rowIndex")
+                    val columnIndex = cell.getInt("columnIndex")
+
+                    // 셀 텍스트 결합
+                    val cellTextLines = cell.getJSONArray("cellTextLines")
+                    val cellTextBuilder = StringBuilder()
+
+                    for (lineIndex in 0 until cellTextLines.length()) {
+                        val line = cellTextLines.getJSONObject(lineIndex)
+                        val cellWords = line.getJSONArray("cellWords")
+
+                        for (wordIndex in 0 until cellWords.length()) {
+                            val word = cellWords.getJSONObject(wordIndex)
+                            cellTextBuilder.append(word.getString("inferText")).append(" ")
+                        }
+                    }
+
+                    val cellText = cellTextBuilder.toString().trim()
+
+                    // '처방 의약품의 명칭' 셀을 찾으면 플래그 설정
+                    if ("처방의약품의명칭" in cellText.replace(" ", "")) {
+                        isProcessingDrugs = true
+                        continue
+                    }
+
+                    // 플래그가 설정된 이후의 셀들을 처리 (실제 약품 정보 추출)
+                    if (isProcessingDrugs) {
+                        // 명칭을 기준으로 데이터를 추출
+                        if (columnIndex == 0) { // 첫 번째 열에서 명칭을 찾음
+                            if (cellText.isEmpty()) {
+                                // 명칭이 비어있으면 저장을 중지
+                                isProcessingDrugs = false
+                                break
+                            }
+
+                            val name = cellText
+                            val dosage = getNextCellValue(cells, rowIndex, columnIndex + 1)
+                            val frequency = getNextCellValue(cells, rowIndex, columnIndex + 2)
+                            val duration = getNextCellValue(cells, rowIndex, columnIndex + 3)
+                            val method = getNextCellValue(cells, rowIndex, columnIndex + 4)
+
+                            // 데이터 저장
+                            extractedData.add(
+                                mapOf(
+                                    "명칭" to name,
+                                    "1회 투약량" to dosage,
+                                    "1일 투여횟수" to frequency,
+                                    "총 투약일수" to duration,
+                                    "용법" to method
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 결과 출력 (예: 로그로 출력)
+            extractedData.forEach { data ->
+                Log.d("ExtractedData", "명칭: ${data["명칭"]}, 1회 투약량: ${data["1회 투약량"]}, 1일 투여횟수: ${data["1일 투여횟수"]}, 총 투약일수: ${data["총 투약일수"]}, 용법: ${data["용법"]}")
+            }
+        } catch (e: Exception) {
+            Log.e("OCR_PROCESSING", "Error processing OCR response: ${e.message}")
+            e.printStackTrace()
+        }
+    }
+
+    private fun getNextCellValue(cells: JSONArray, rowIndex: Int, columnIndex: Int): String {
+        for (j in 0 until cells.length()) {
+            val nextCell = cells.getJSONObject(j)
+            if (nextCell.getInt("rowIndex") == rowIndex && nextCell.getInt("columnIndex") == columnIndex) {
+                val cellTextLines = nextCell.getJSONArray("cellTextLines")
+                val stringBuilder = StringBuilder()
+
+                for (k in 0 until cellTextLines.length()) {
+                    val line = cellTextLines.getJSONObject(k)
+                    val cellWords = line.getJSONArray("cellWords")
+
+                    for (l in 0 until cellWords.length()) {
+                        val word = cellWords.getJSONObject(l)
+                        stringBuilder.append(word.getString("inferText")).append(" ")
+                    }
+                }
+
+                return stringBuilder.toString().trim()  // 공백 제거
+            }
+        }
+        return ""
+    }
+
     @Throws(IOException::class)
     private fun writeMultiPart(out: OutputStream, jsonMessage: String, byteArray: ByteArray, boundary: String) {
         val sb = StringBuilder()
@@ -251,7 +365,7 @@ class MainActivity : AppCompatActivity() {
 
         out.write(("--$boundary\r\n").toByteArray(Charsets.UTF_8))
         val fileString = StringBuilder()
-        fileString.append("Content-Disposition:form-data; name=\"file\"; filename=\"medi.jpg\"\r\n")
+        fileString.append("Content-Disposition:form-data; name=\"file\"; filename=\"medi3.jpg\"\r\n")
         fileString.append("Content-Type: application/octet-stream\r\n\r\n")
         out.write(fileString.toString().toByteArray(Charsets.UTF_8))
         out.flush()
