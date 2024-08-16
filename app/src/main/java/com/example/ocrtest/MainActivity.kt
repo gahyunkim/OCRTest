@@ -150,7 +150,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun getBitmapFromLocalFile(): Bitmap {
-        val drawableId = R.drawable.medi3 // drawable 파일 이름이 medi3.jpg인 경우
+        val drawableId = R.drawable.medi4 // drawable 파일 이름이 medi3.jpg인 경우
         return BitmapFactory.decodeResource(resources, drawableId)
     }
 
@@ -298,7 +298,8 @@ class MainActivity : AppCompatActivity() {
                                 break
                             }
 
-                            val name = cellText
+                            // 명칭에서 숫자를 제거
+                            val name = cellText.replace(Regex("\\d"), "")
                             val dosage = getNextCellValue(cells, rowIndex, columnIndex + 1)
                             val frequency = getNextCellValue(cells, rowIndex, columnIndex + 2)
                             val duration = getNextCellValue(cells, rowIndex, columnIndex + 3)
@@ -365,7 +366,7 @@ class MainActivity : AppCompatActivity() {
 
         out.write(("--$boundary\r\n").toByteArray(Charsets.UTF_8))
         val fileString = StringBuilder()
-        fileString.append("Content-Disposition:form-data; name=\"file\"; filename=\"medi3.jpg\"\r\n")
+        fileString.append("Content-Disposition:form-data; name=\"file\"; filename=\"medi4.jpg\"\r\n")
         fileString.append("Content-Type: application/octet-stream\r\n\r\n")
         out.write(fileString.toString().toByteArray(Charsets.UTF_8))
         out.flush()
