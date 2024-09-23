@@ -150,7 +150,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun getBitmapFromLocalFile(): Bitmap {
-        val drawableId = R.drawable.medi4 // drawable 파일 이름이 medi3.jpg인 경우
+        val drawableId = R.drawable.ocr_img // drawable 파일 이름이 medi3.jpg인 경우
         return BitmapFactory.decodeResource(resources, drawableId)
     }
 
@@ -258,6 +258,15 @@ class MainActivity : AppCompatActivity() {
 
             var isProcessingDrugs = false
 
+            // 필드를 저장할 변수 선언
+            var nameColumnIndex = -1
+            var dosageColumnIndex = -1
+            var frequencyColumnIndex = -1
+            var durationColumnIndex = -1
+
+            // 중복 방지용 Set
+            val processedRows = mutableSetOf<Int>()
+
             for (tableIndex in 0 until tables.length()) {
                 val cells = tables.getJSONObject(tableIndex).getJSONArray("cells")
 
@@ -265,6 +274,12 @@ class MainActivity : AppCompatActivity() {
                     val cell = cells.getJSONObject(i)
                     val rowIndex = cell.getInt("rowIndex")
                     val columnIndex = cell.getInt("columnIndex")
+
+                    // 중복된 row 처리 방지
+                    if (processedRows.contains(rowIndex)) {
+                        Log.d("OCR_PROCESSING", "중복된 rowIndex: $rowIndex 처리 건너뜀")
+                        continue
+                    }
 
                     // 셀 텍스트 결합
                     val cellTextLines = cell.getJSONArray("cellTextLines")
@@ -281,54 +296,116 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     val cellText = cellTextBuilder.toString().trim()
+                    Log.d(
+                        "OCR_PROCESSING",
+                        "셀 처리 중: rowIndex=$rowIndex, columnIndex=$columnIndex, 추출된 셀 텍스트=$cellText"
+                    )
 
                     // '처방 의약품의 명칭' 셀을 찾으면 플래그 설정
                     if ("처방의약품의명칭" in cellText.replace(" ", "")) {
                         isProcessingDrugs = true
+                        Log.d("OCR_PROCESSING", "'처방의약품의 명칭' 발견. 플래그 설정")
+                        nameColumnIndex = columnIndex
+                        Log.d("OCR_PROCESSING", "명칭 컬럼 인덱스 설정: $nameColumnIndex")
                         continue
                     }
 
                     // 플래그가 설정된 이후의 셀들을 처리 (실제 약품 정보 추출)
                     if (isProcessingDrugs) {
-                        // 명칭을 기준으로 데이터를 추출
-                        if (columnIndex == 0) { // 첫 번째 열에서 명칭을 찾음
-                            if (cellText.isEmpty()) {
-                                // 명칭이 비어있으면 저장을 중지
-                                isProcessingDrugs = false
-                                break
+                        // 필드 이름을 찾음
+                        when {
+                            "1회 투약량" in cellText -> {
+                                dosageColumnIndex = columnIndex
+                                Log.d("OCR_PROCESSING", "1회 투약량 컬럼 인덱스 설정: $dosageColumnIndex")
                             }
+                            "1일 투여횟수" in cellText -> {
+                                frequencyColumnIndex = columnIndex
+                                Log.d("OCR_PROCESSING", "1일 투여횟수 컬럼 인덱스 설정: $frequencyColumnIndex")
+                            }
+                            "총 투약일수" in cellText -> {
+                                durationColumnIndex = columnIndex
+                                Log.d("OCR_PROCESSING", "총 투약일수 컬럼 인덱스 설정: $durationColumnIndex")
+                            }
+                        }
 
-                            // 명칭에서 숫자를 제거
-                            val name = cellText.replace(Regex("\\d"), "")
-                            val dosage = getNextCellValue(cells, rowIndex, columnIndex + 1)
-                            val frequency = getNextCellValue(cells, rowIndex, columnIndex + 2)
-                            val duration = getNextCellValue(cells, rowIndex, columnIndex + 3)
-                            val method = getNextCellValue(cells, rowIndex, columnIndex + 4)
+                        // 필드 인덱스가 모두 설정된 경우, 데이터를 한 번에 추출
+                        if (nameColumnIndex != -1 && dosageColumnIndex != -1 && frequencyColumnIndex != -1 &&
+                            durationColumnIndex != -1
+                        ) {
 
-                            // 데이터 저장
-                            extractedData.add(
-                                mapOf(
-                                    "명칭" to name,
-                                    "1회 투약량" to dosage,
-                                    "1일 투여횟수" to frequency,
-                                    "총 투약일수" to duration,
-                                    "용법" to method
+                            // 데이터를 추출
+                            Log.d("OCR_PROCESSING", "데이터 추출 시작")
+
+                            val name = cleanName(getNextCellValue(cells, rowIndex, nameColumnIndex))
+                            val dosage = cleanDosage(getNextCellValue(cells, rowIndex, dosageColumnIndex))
+                            val frequency = cleanFrequency(
+                                getNextCellValue(
+                                    cells,
+                                    rowIndex,
+                                    frequencyColumnIndex
                                 )
                             )
+                            val duration = cleanDuration(
+                                getNextCellValue(
+                                    cells,
+                                    rowIndex,
+                                    durationColumnIndex
+                                )
+                            )
+
+                            // 이름이 [로 시작하거나 숫자로 시작하는 경우에만 저장
+                            if (name.startsWith("[") || name.matches(Regex("^\\d.*"))) {
+                                // 데이터 저장
+                                extractedData.add(
+                                    mapOf(
+                                        "명칭" to name,
+                                        "1회 투약량" to dosage,
+                                        "1일 투여횟수" to frequency,
+                                        "총 투약일수" to duration,
+                                    )
+                                )
+
+                                // 해당 row 처리 완료로 설정
+                                processedRows.add(rowIndex)
+                            } else {
+                                Log.d("OCR_PROCESSING", "명칭 조건에 맞지 않아 저장하지 않음: $name")
+                            }
                         }
                     }
                 }
             }
 
-            // 결과 출력 (예: 로그로 출력)
+            // 최종적으로 추출된 데이터를 로그로 출력
             extractedData.forEach { data ->
-                Log.d("ExtractedData", "명칭: ${data["명칭"]}, 1회 투약량: ${data["1회 투약량"]}, 1일 투여횟수: ${data["1일 투여횟수"]}, 총 투약일수: ${data["총 투약일수"]}, 용법: ${data["용법"]}")
+                Log.d("ExtractedData", "명칭: ${data["명칭"]}, 1회 투약량: ${data["1회 투약량"]}, 1일 투여횟수: ${data["1일 투여횟수"]}, 총 투약일수: ${data["총 투약일수"]}")
             }
         } catch (e: Exception) {
             Log.e("OCR_PROCESSING", "Error processing OCR response: ${e.message}")
             e.printStackTrace()
         }
     }
+
+    private fun cleanName(name: String): String {
+        Log.d("CLEAN_FUNCTION", "이름 정제 중: $name")
+        return name.replace(Regex("\\d|\\(.*?\\)"), "").trim()
+    }
+
+    private fun cleanDosage(dosage: String): String {
+        Log.d("CLEAN_FUNCTION", "1회 투약량 정제 중: $dosage")
+        return dosage.replace(Regex(" cc| gm| 개| 정"), "").trim() + " cc"
+    }
+
+    private fun cleanFrequency(frequency: String): String {
+        Log.d("CLEAN_FUNCTION", "1일 투여횟수 정제 중: $frequency")
+        return frequency.replace(Regex("\\s+"), "").replace(Regex(" cc| gm| 개| 정"), " 번")
+    }
+
+    private fun cleanDuration(duration: String): String {
+        Log.d("CLEAN_FUNCTION", "총 투약일수 정제 중: $duration")
+        return duration.replace(Regex("\\D"), "").ifEmpty { "1" }
+    }
+
+
 
     private fun getNextCellValue(cells: JSONArray, rowIndex: Int, columnIndex: Int): String {
         for (j in 0 until cells.length()) {
@@ -347,11 +424,15 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                return stringBuilder.toString().trim()  // 공백 제거
+                val cellValue = stringBuilder.toString().trim()
+                Log.d("OCR_PROCESSING", "다음 셀 값 추출: $cellValue")
+                return cellValue  // 공백 제거
             }
         }
+        Log.d("OCR_PROCESSING", "다음 셀 값이 비어있음")
         return ""
     }
+
 
     @Throws(IOException::class)
     private fun writeMultiPart(out: OutputStream, jsonMessage: String, byteArray: ByteArray, boundary: String) {
@@ -366,7 +447,7 @@ class MainActivity : AppCompatActivity() {
 
         out.write(("--$boundary\r\n").toByteArray(Charsets.UTF_8))
         val fileString = StringBuilder()
-        fileString.append("Content-Disposition:form-data; name=\"file\"; filename=\"medi4.jpg\"\r\n")
+        fileString.append("Content-Disposition:form-data; name=\"file\"; filename=\"ocr_img.jpg\"\r\n")
         fileString.append("Content-Type: application/octet-stream\r\n\r\n")
         out.write(fileString.toString().toByteArray(Charsets.UTF_8))
         out.flush()
